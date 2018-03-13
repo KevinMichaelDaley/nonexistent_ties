@@ -367,17 +367,30 @@ void* run_connection_graph_optimization( void* pparms ) {//optimization routine
 						qHead->next = NULL;
 
 						int kk;
-						for ( kk = 0; kk < diam * N * N; ++kk ) {
-							qHead->all_pairs_paths[i] = q->all_pairs_paths[i];
-						}
+                        int ii,jj;
+						for ( ii = 0; ii < N; ++ii ) {
+                            for ( jj = 0; jj < N; ++jj) {
+                                int m=jj;
+                                for ( kk = 1; kk < diam && m!=ii; ++kk) {
+                                    m=q->all_pairs_paths[(ii*N+jj)*diam+kk];
+                                    qHead->all_pairs_paths[(ii*N+jj)*diam+kk]=m;
+                                }
+                            }
+                        }
+						
 						for ( kk = 0; kk <= itok; ++kk ) {
+                            
+                            int m=q->all_pairs_paths[( k * N + j ) * diam + kk];
+                            parms->rerouted[i * N * N + j * N + m] = 1;
 							qHead->all_pairs_paths[( i * N + j ) * diam + kk + ktoj] = q->all_pairs_paths[( i * N + k ) * diam + kk];
 						}
 						for ( kk = 0; kk <= ktoj - 1; ++kk ) {
+                            int m=q->all_pairs_paths[( k * N + j ) * diam + kk];
+                            parms->rerouted[i * N * N + j * N + m] = 1;
 							qHead->all_pairs_paths[( i * N + j ) * diam + kk] = q->all_pairs_paths[( k * N + j ) * diam + kk];
 						}
-						//and to the visited configuration list
 						parms->rerouted[i * N * N + j * N + k] = 1;
+						//and to the visited configuration list
 						qHead->next = q->next;
 						struct path_choice_queue* qHead0 = q;
 						qHead0->next = qHead;
@@ -553,6 +566,7 @@ float generalized_connection_graph_method( float* A, float a, int num_nodes, int
 	free( permutation );
 	free( pred );
 	free( dist );
+    free(rerouted);
 	if ( directed ) {
 		free( path_weights );
 		free( Aaug );
@@ -576,23 +590,34 @@ int main( int argc, char** argv ) { ///example which produces fig. 3 from the au
 	Complex* V = malloc( N * N * sizeof( Complex ) );
 	float* workr = malloc( N * sizeof( float ) );
 	float* Adj = malloc( N * N * sizeof( float ) );
-	for ( k = 2; k <= N / 2 + 1; ++k ) {
-		memset( Adj,0,N * N * sizeof( float ) );
-		for ( i = 1; i < N; ++i ) {
-			for ( j = 1; j <= k; ++j ) {
-				int j1 = ( i + j ) % N;
-				if ( i % 2 == 0 ) {
-					Adj[i * N + j1] = 1;
-				} else {
-					Adj[j1 * N + i] = 1;
-				}
-			}
-		}
+    /*
+	for ( k = 5; k <= 50; ++k ) {
+            memset( Adj,0,N * N * sizeof( float ) );
+            for ( i = 0; i < N; ++i ) {
+                for ( j = 0; j < N; ++j ) {
+                    if(j%50<k){
+                        Adj[i*N+j]=1;
+                    }
+                }
+            }*/
+    for ( k = 2; k <= 50; ++k ) {
+            memset( Adj,0,N * N * sizeof( float ) );
+            for ( i = 0; i < N; ++i ) {
+                for ( j = 1; j <=k; ++j ) {
+                    if(i%2==0){
+                        Adj[i*N+(i+j)%N]=1;
+                    }
+                    else{
+                        Adj[i+((i+j)%N)*N]=1;
+                    }
+                }
+            }
 		//printf("\n");
 		float* Adj1 = malloc( N * N * sizeof( float ) );
 		memcpy( Adj1, Adj, N * N * sizeof( float ) );
-		float eps1 = generalized_connection_graph_method( Adj,7.79,N,1,4096 );
-		float eps0 = generalized_connection_graph_method( Adj,7.79,N,0,4096 );
+		float eps1 = generalized_connection_graph_method( Adj,7.79,N,1,1024 );
+        printf( "%i %f ",k,eps1);
+		float eps0 = generalized_connection_graph_method( Adj,7.79,N,0,1024 );
 		for ( i = 0; i < N; ++i ) {
 			Adj1[i] = Adj[i];
 			float sum = 0;
@@ -610,7 +635,7 @@ int main( int argc, char** argv ) { ///example which produces fig. 3 from the au
 		int lworkl = 3 * N * N + 8 * N;
 		int info = 0;
 		char bmat = 'I';
-		char which[2] = {'S','M'};
+		char which[2] = {'L','R'};
 		while ( 1 ) {
 			cnaupd_( &ido, &bmat, &N, which,
 					 &nev, &tol, resid,
@@ -638,11 +663,18 @@ int main( int argc, char** argv ) { ///example which produces fig. 3 from the au
 				}
 			}
 		}
+		free(Adj1);
 		float re_eig2 = workl[ipntr[5] + 1][0];
 		int components = 0;
-		printf( "%i %f %f %f %f\n", k, eps1, eps0,
+		 printf( "%f %f %f\n", eps0,
 				7.79 / fabs( re_eig2 ), re_eig2 );
+        fflush( stdout );
 	}
-	fflush( stdout );
+	free(Adj);
+    free(V);
+    free(workd);
+    free(workl);
+    free(workr);
+    free(resid);
 	exit( 0 );
 }
