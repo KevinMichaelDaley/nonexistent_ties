@@ -16,38 +16,43 @@ struct path_choice_queue {
     //this struct represents one node of a queue which is processed sequentially.
 	int* all_pairs_paths;
 	struct path_choice_queue* next;
+    int diam; 
 };
 
-void* alloc_seq( struct path_choice_queue* qseq, int nbatch, int N, int* qseq_head ) {//we use a fixed-sized circular array buffer queue to save on little dynamic allocations, which are expensive and lead to fragmentation and heap corruption.
-	int diam = N;
+void* alloc_seq( struct path_choice_queue* qseq, int nbatch, int N, int* qseq_head, int diam) {//we use a fixed-sized circular array buffer queue to save on little dynamic allocations, which are expensive and lead to fragmentation and heap corruption.
 	int qhead0 = qseq_head[0]++;
 	qseq_head[0] %= nbatch;
 	struct path_choice_queue* q = &( qseq[qhead0] );
+    if(q->diam<diam && q->all_pairs_paths!=NULL){
+        free(q->all_pairs_paths);
+        q->all_pairs_paths=NULL;
+    }
 	if ( q->all_pairs_paths == NULL ) {
 		q->all_pairs_paths = malloc( N * N * diam * sizeof( int ) );
 	}
+	q->diam=diam;
 	return q;
 }
 
 
-void build_path_from_predecessors( int* path, int i, int j, int* choice, int* pi, int N, float* dist, float* Aaug ) {
-	int diam = N;
+void build_path_from_predecessors( int* path, int i, int j, int* choice, int* pi, int N, float* dist, float* Aaug, int max_len) {
+	int diam = max_len;
 	if ( i == j ) {
 		path[0] = i;
 
 	} else if ( Aaug[i * N + j] != 0 )            {
 		path[0] = j;
 		path[1] = i;
-	} else if ( dist[i * N + j] > N * N )              {
+	} else if ( dist[i * N + j] >= diam )              {
 		return;
 	} else {
 		int n = 0;
 		for ( n = 0; n <= choice[i * N + j]; ++n ) {
-			if ( pi[( i * N + j ) * diam + choice[i * N + j]] >= 0 ) {
+			if ( pi[( i * N + j ) * N + choice[i * N + j]] >= 0 ) {
 				break;
 			}
 		}
-		build_path_from_predecessors( &( path[1] ),i,pi[( i * N + j ) * diam + choice[i * N + j] - n],choice,pi,N, dist, Aaug );
+		build_path_from_predecessors( &( path[1] ),i,pi[( i * N + j ) * N + choice[i * N + j] - n],choice,pi,N, dist, Aaug, max_len);
 		path[0] = j;
 	}
 }
@@ -59,18 +64,21 @@ void build_queue_from_predecessor_matrix( struct path_choice_queue** q,
                                           int nbatch, 
                                           void* qseq, 
                                           int* qseq_head, 
-                                          float* Aaug ) {
+                                          float* Aaug,
+                                          int max_len
+                                        ) {
      //given a precessesor matrix computed by floyd-warshall algorithm, 
     //initialize the queue of path choices for processing
-	int i,j,k, diam = N;
-	q[0] = alloc_seq( qseq, nbatch, N, qseq_head );
+	int i,j,k;
+	q[0] = alloc_seq( qseq, nbatch, N, qseq_head, max_len);
+    int diam=q[0]->diam;
 	q[0]->next = NULL;
 	for ( i = 0; i < N; ++i ) {
-		for ( j = 0; j < N; ++j ) {
+		for ( j = i+1; j < N; ++j ) {
 			if ( i == j ) {
 				continue;
 			}
-			if ( dist[i * N + j] >= N * N ) {
+			if ( dist[i * N + j] >= diam ) {
 				continue;
 			}
 			if ( Aaug[i * N + j] != 0 ) {
@@ -81,20 +89,26 @@ void build_queue_from_predecessor_matrix( struct path_choice_queue** q,
 			for ( k = 0; k < diam; ++k ) {
 				q[0]->all_pairs_paths[diam * ( i * N + j ) + k] = -1;
 			}
-			build_path_from_predecessors( &( q[0]->all_pairs_paths[( i * N + j ) * diam] ), i,j, permutation, pi,N, dist, Aaug );
+			build_path_from_predecessors( &( q[0]->all_pairs_paths[( i * N + j ) * diam] ), i,j, permutation, pi,N, dist, Aaug, diam);
 			permutation[i * N + j]++;
 			if ( permutation[i * N + j] > diam - 1 ) {
 				permutation[i * N + j]--;
 				continue;
 			}
-			if ( pi[( i * N + j ) * diam + permutation[i * N + j]] < 0 ) {
+			if ( pi[( i * N + j ) * N + permutation[i * N + j]] < 0 ) {
 				permutation[i * N + j]--;
 				continue;
 			}
-			build_queue_from_predecessor_matrix( &( q[0]->next ),pi,permutation, dist, N, nbatch, qseq, qseq_head, Aaug );
+			build_queue_from_predecessor_matrix( &( q[0]->next ),pi,permutation, dist, N, nbatch, qseq, qseq_head, Aaug, diam );
 			permutation[i * N + j]--;
 		}
 	}
+	
+	for ( i = 0; i < N; ++i ) {
+		for ( j = i+1; j < N; ++j ) {
+            memcpy(&( q[0]->all_pairs_paths[( j * N + i ) * diam] ),&( q[0]->all_pairs_paths[( i * N + j ) * diam]), diam*sizeof(int) );
+        }
+    }
 }
 float run_connection_graph_method_for_path_choice( struct path_choice_queue* q, 
                                                    int* reroute_edge,
@@ -104,7 +118,7 @@ float run_connection_graph_method_for_path_choice( struct path_choice_queue* q,
 												   int directed, 
                                                    float* Aaug ) {
     //perform the computation of bound for a given choice of paths
-	int diam = N;
+	int diam = q->diam;
 	int i,j,k;
 	if ( directed ) {
         //directed networks are treated separately due to node unbalance
@@ -290,15 +304,18 @@ void* run_connection_graph_optimization( void* pparms ) {//optimization routine
 	float twocell = parms->twocell;
 	int N = parms->N;
 	float* Aaug = parms->Aaug;
-	int diam = N;
 	int directed = parms->directed;
-
+    
 	struct path_choice_queue* qHead0 = parms->qHead0;
 	struct path_choice_queue* q = qv;
+    
+	int diam = q->diam;
 	int* reroute_edge = malloc( N * N * sizeof( int ) );
     --parms->queue_imbalance;
 	int ktoj, itoj, itok;
 	while ( q != NULL ) {
+        diam=q->diam;
+        float emin0=epsilon_min[0];
 		memset( reroute_edge,0,N * N * sizeof( int ) );
 		float epsilon = run_connection_graph_method_for_path_choice( q, reroute_edge, mean_node_unbalance, twocell, N, directed, Aaug );//compute our current bound
 		epsilon_min[0] = MIN( epsilon_min[0], epsilon );//compare it to our current best bound
@@ -306,6 +323,7 @@ void* run_connection_graph_optimization( void* pparms ) {//optimization routine
                                                 //node-balanced networks; see the paper for more details.
 			int i,j;
             int ii,jj,kk;
+            int maxlen=0;
             for ( ii = 0; ii < N; ++ii ) {
                 for ( jj = 0; jj < N; ++jj) {
                     int m=jj;
@@ -313,8 +331,11 @@ void* run_connection_graph_optimization( void* pparms ) {//optimization routine
                         m=q->all_pairs_paths[(ii*N+jj)*diam+kk];
                         parms->rerouted[(ii*N+jj)*N+m]=1;
                     }
+                    maxlen=MAX(maxlen,kk);
                 }
             }
+            
+            int diam_new=2*maxlen+1;
 			for ( i = 0; i < N; ++i ) {
 				for ( j = i+1; j < N; ++j ) {
                     
@@ -388,7 +409,7 @@ void* run_connection_graph_optimization( void* pparms ) {//optimization routine
 						}
 
                         //and add it to the queue
-						struct path_choice_queue* qHead = alloc_seq( qseq, nbatch, N, qseq_head );
+						struct path_choice_queue* qHead = alloc_seq( qseq, nbatch, N, qseq_head, diam_new);
 						qHead->next = NULL;
 
 						for ( ii = 0; ii < N; ++ii ) {
@@ -396,7 +417,7 @@ void* run_connection_graph_optimization( void* pparms ) {//optimization routine
                                 int m=jj;
                                 for ( kk = 1; kk < diam && m!=ii; ++kk) {
                                     m=q->all_pairs_paths[(ii*N+jj)*diam+kk];
-                                    qHead->all_pairs_paths[(ii*N+jj)*diam+kk]=m;
+                                    qHead->all_pairs_paths[(ii*N+jj)*qHead->diam+kk]=m;
                                 }
                             }
                         }
@@ -404,25 +425,30 @@ void* run_connection_graph_optimization( void* pparms ) {//optimization routine
 						for ( kk = 0; kk <= itok; ++kk ) {
                             
                             int m=q->all_pairs_paths[( i * N + k ) * diam + kk];
-							qHead->all_pairs_paths[( i * N + j ) * diam + kk + ktoj] = m;
+							qHead->all_pairs_paths[( i * N + j ) * qHead->diam + kk + ktoj] = m;
+                            parms->rerouted[i * N * N + j * N + m] = 1;
+                            parms->rerouted[j * N * N + i * N + m] = 1;
 						}
 						for ( kk = 0; kk <= ktoj - 1; ++kk ) {
                             int m=q->all_pairs_paths[( k * N + j ) * diam + kk];
-							qHead->all_pairs_paths[( i * N + j ) * diam + kk] = m;
+							qHead->all_pairs_paths[( i * N + j ) * qHead->diam + kk] = m;
+                            parms->rerouted[i * N * N + j * N + m] = 1;
+                            parms->rerouted[j * N * N + i * N + m] = 1;
 						}
 						parms->rerouted[i * N * N + j * N + k] = 1;
+                        parms->rerouted[j * N * N + i * N + k] = 1;
 						//and to the visited configuration list
 						qHead->next = q->next;
 						struct path_choice_queue* qHead0 = q;
 						qHead0->next = qHead;
                         ++parms->queue_imbalance;
-                        
 					}
-
 				}
 			}
 		}
-		fprintf(stderr,"%i %f\n", parms->queue_imbalance, epsilon_min[0]); 
+		if(epsilon_min[0]<emin0){
+            fprintf(stderr,"%i %f\n", parms->queue_imbalance, epsilon_min[0]); 
+        }
         //fflush(stderr);
 		//keep iterating until we have nothing left to examine.
 		q = q->next;
@@ -547,8 +573,10 @@ float generalized_connection_graph_method( float* A, float a, int num_nodes, int
 			}
 		}
 	}
+	int max_len=1;
 	for ( i = 0; i < N; ++i ) {
 		for ( j = 0; j < N; ++j ) {
+            max_len=MAX(dist[i*N+j],max_len);
 			if ( dist[i * N + j] >= N * N ) {
 				return -1;
 			}
@@ -560,7 +588,7 @@ float generalized_connection_graph_method( float* A, float a, int num_nodes, int
 	memset( permutation,0,N * N * sizeof( int ) );
 	int qseq_head = 0;
 	struct path_choice_queue* q0;
-	build_queue_from_predecessor_matrix( &q0, pred, permutation, dist, N, nbatch, qseq, &qseq_head, Aaug );
+	build_queue_from_predecessor_matrix( &q0, pred, permutation, dist, N, nbatch, qseq, &qseq_head, Aaug, max_len+1);
 	struct path_choice_queue* q1 = q0, *qHead0;
 	float epsilon_min = FLT_MAX;
 	struct connection_graph_params_t parms =
@@ -606,7 +634,7 @@ float generalized_connection_graph_method( float* A, float a, int num_nodes, int
 
 int main( int argc, char** argv ) { ///example which produces fig. 3 from the augmented graph paper.
                                     //eigenvalue computation is via arpack.
-	int N = 50;
+	int N = 100;
 	int i,j, k;
 	Complex* workd = malloc( 3 * N * sizeof( Complex ) );//"working arrays" for arpack.
 	Complex* workl = malloc( ( 3 * N * N + 5 * N ) * sizeof( Complex ) );
@@ -640,7 +668,7 @@ int main( int argc, char** argv ) { ///example which produces fig. 3 from the au
 		//printf("\n");
 		float* Adj1 = malloc( N * N * sizeof( float ) );
 		memcpy( Adj1, Adj, N * N * sizeof( float ) );
-		float eps1 = generalized_connection_graph_method( Adj,7.79,N,1,5020, 2.0);
+		float eps1 = generalized_connection_graph_method( Adj,7.79,N,1,200000, 2.0);
         printf( "%i %f ",k,eps1);
 		float eps0 = generalized_connection_graph_method( Adj,7.79,N,0,1, 0.99);
 		for ( i = 0; i < N; ++i ) {
