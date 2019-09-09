@@ -667,7 +667,7 @@ int main( int argc, char** argv ) { ///example which produces fig. 3 from the au
 //            }
          
            int num_edges=0;
-           int num_neighbors=8;
+           int num_neighbors=4;
 	   for ( i = 0; i < N; ++i ) { for ( j = 1; j <=num_neighbors; ++j ) {
 #ifndef eig
 			
