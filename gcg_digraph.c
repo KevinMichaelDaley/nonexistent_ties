@@ -115,7 +115,7 @@ float run_connection_graph_method_for_path_choice( struct path_choice_queue* q,
 												   float* mean_node_unbalance,
 												   float twocell,
 												   int N,
-												   int directed, 
+												   int directed, float* A,
                                                    float* Aaug ) {
     //perform the computation of bound for a given choice of paths
 	int diam = q->diam;
@@ -141,15 +141,26 @@ float run_connection_graph_method_for_path_choice( struct path_choice_queue* q,
 				if ( d == diam ) {
 					continue;
 				}
-				if ( d == 1 && mean_node_unbalance[i * N + j] < 0 ) {
+				if ( d==1 && A[i*N+j]==0 && A[j*N+i]==0 && mean_node_unbalance[i * N + j] < 0 ) {
 					lhs[i * N + j] += 1;
 					lhs[j * N + i] += 1;
 					continue;
 				}
-				float W = MAX( mean_node_unbalance[i * N + j] / twocell + 1,0 );
+				
+				if ( mean_node_unbalance[i * N + j] < 0 ) {
+					for ( k = 0; k < d; ++k ) {
+						int u = q->all_pairs_paths[( i * N + j ) * diam + k];
+						int v = q->all_pairs_paths[( i * N + j ) * diam + k + 1];
+						lhs[u * N + v] += d;
+						lhs[v * N + u] += d;
+					}
+					continue;
+				}
+				
+				float W = MAX(mean_node_unbalance[i * N + j] / twocell + 1,0);
 
 
-				if ( W == 0 ) {
+				if ( W <= 0 ) {
 					continue;
 				}
 				for ( k = 0; k < d; ++k ) {
@@ -212,15 +223,13 @@ float run_connection_graph_method_for_path_choice( struct path_choice_queue* q,
 		for ( i = 0; i < N; ++i ) {
 			for ( j = i + 1; j < N; ++j ) {
 
-				if ( Aaug[i * N + j] == 0 || fabs( Aaug[i * N + j] * N - twocell * rhs[i * N + j] ) < 0.001 ) {
-					continue;
-				}
 				if ( lhs[i * N + j] == 0 ) {
 					continue;
 				}
 				//solve the inequality and if we have a bottleneck edge for the purpose of computing the bound,
 				//then store the result as the current maximum
-				eps = MAX( eps,twocell * ( lhs[i * N + j] / ( N * Aaug[i * N + j] + twocell * rhs[i * N + j] ) ) );
+				float ratio=twocell/N;
+				eps = MAX( eps, ( ratio*lhs[i * N + j] / (  Aaug[i * N + j] - ratio*rhs[i * N + j] ) ) );
 			}
 		}
 		if ( eps == 0 ) {
@@ -288,6 +297,7 @@ struct connection_graph_params_t {//parameters for iterating over the queue
 	void* qHead0;
 	float twocell;
 	int N;
+	float* A;
 	float* Aaug;
 	int directed;
 	int* qseq_head;
@@ -304,6 +314,7 @@ void* run_connection_graph_optimization( void* pparms ) {//optimization routine
 	float twocell = parms->twocell;
 	int N = parms->N;
 	float* Aaug = parms->Aaug;
+	float* A=parms->A;
 	int directed = parms->directed;
     
 	struct path_choice_queue* qHead0 = parms->qHead0;
@@ -311,13 +322,13 @@ void* run_connection_graph_optimization( void* pparms ) {//optimization routine
     
 	int diam = q->diam;
 	int* reroute_edge = malloc( N * N * sizeof( int ) );
-    --parms->queue_imbalance;
+	--parms->queue_imbalance;
 	int ktoj, itoj, itok;
 	while ( q != NULL ) {
-        diam=q->diam;
-        float emin0=epsilon_min[0];
+	        diam=q->diam;
+        	float emin0=epsilon_min[0];
 		memset( reroute_edge,0,N * N * sizeof( int ) );
-		float epsilon = run_connection_graph_method_for_path_choice( q, reroute_edge, mean_node_unbalance, twocell, N, directed, Aaug );//compute our current bound
+		float epsilon = run_connection_graph_method_for_path_choice( q, reroute_edge, mean_node_unbalance, twocell, N, directed, A, Aaug );//compute our current bound
 		epsilon_min[0] = MIN( epsilon_min[0], epsilon );//compare it to our current best bound
 		if ( epsilon <= parms->alpha*( epsilon_min[0] ) ) {//this backtracking criterion is optimal for alpha=2 in the case of uniformly weighted, 
                                                 //node-balanced networks; see the paper for more details.
@@ -447,7 +458,7 @@ void* run_connection_graph_optimization( void* pparms ) {//optimization routine
 			}
 		}
 		if(epsilon_min[0]<emin0){
-            fprintf(stderr,"%i %f\n", parms->queue_imbalance, epsilon_min[0]); 
+            //fprintf(stderr,"%i %f\n", parms->queue_imbalance, epsilon_min[0]); 
         }
         //fflush(stderr);
 		//keep iterating until we have nothing left to examine.
@@ -508,7 +519,7 @@ float generalized_connection_graph_method( float* A, float a, int num_nodes, int
 					mean_node_unbalance[i * N + j] = ( unbalance[i] + unbalance[j] ) / 2.0f;
 					Aaug[i * N + j] = ( A[i * N + j] + A[j * N + i] ) / 2.0;
 					if ( mean_node_unbalance[i * N + j] < 0 ) {
-						if ( augment || Aaug[i * N + j] != 0 ) {
+						if ( augment || Aaug[i*N+j]!=0) {
 							Aaug[i * N + j] += fabs( mean_node_unbalance[i * N + j] / N );
 						}
 					}
@@ -576,7 +587,7 @@ float generalized_connection_graph_method( float* A, float a, int num_nodes, int
 	int max_len=1;
 	for ( i = 0; i < N; ++i ) {
 		for ( j = 0; j < N; ++j ) {
-            max_len=MAX(dist[i*N+j],max_len);
+            		max_len=MAX(dist[i*N+j],max_len);
 			if ( dist[i * N + j] >= N * N ) {
 				return -1;
 			}
@@ -601,6 +612,7 @@ float generalized_connection_graph_method( float* A, float a, int num_nodes, int
 		qHead0,
 		twocell,
 		N,
+		A,
 		Aaug,
 		directed,
 		&qseq_head,
@@ -634,100 +646,104 @@ float generalized_connection_graph_method( float* A, float a, int num_nodes, int
 
 int main( int argc, char** argv ) { ///example which produces fig. 3 from the augmented graph paper.
                                     //eigenvalue computation is via arpack.
+		
+	srand(fgetc(stdin));
+
 	int N = 100;
+//#define eig
+//#define RANDOM
+#define REWIRE
+#ifndef RANDOM
 	int i,j, k;
-	Complex* workd = malloc( 3 * N * sizeof( Complex ) );//"working arrays" for arpack.
-	Complex* workl = malloc( ( 3 * N * N + 5 * N ) * sizeof( Complex ) );
-	Complex* resid = malloc( N * sizeof( Complex ) );
-	Complex* V = malloc( N * N * sizeof( Complex ) );
-	float* workr = malloc( N * sizeof( float ) );
 	float* Adj = malloc( N * N * sizeof( float ) );
-    /*
-	for ( k = 5; k <= 50; ++k ) {
-            memset( Adj,0,N * N * sizeof( float ) );
-            for ( i = 1; i < N; ++i ) {
+ 	  memset(Adj,0,N*N*sizeof(float));   
+//            memset( Adj,0,N * N * sizeof( float ) );
+//            for ( i = 1; i < N; ++i ) {
+//                for ( j = 0; j < N; ++j ) {
+//                    if(rand()%1000<k){
+//                        Adj[i*N+j]=1;
+//                    }
+//                }
+//            }
+         
+           int num_edges=0;
+           int num_neighbors=8;
+	   for ( i = 0; i < N; ++i ) { for ( j = 1; j <=num_neighbors; ++j ) {
+#ifndef eig
+			
+                        Adj[i*N+(i+j)%N]=1.0;
+                        Adj[i+((i+j)%N)*N]=1.0;
+#else
+
+                        Adj[i*N+(i+j)%N]=1.0;
+                        Adj[i+((i+j)%N)*N]=1.0;
+#endif
+			num_edges+=2;
+                }
+            }
+
+	    FILE* fp=fopen("adj.np", "w+");
+	    for(int i=0; i<N; ++i){
+	    	for(int j=0; j<N; ++j){
+			fprintf(fp,"%f ", Adj[i*N+j]);
+		}
+		fprintf(fp, "\n");
+	    }
+	    fclose(fp);
+	    while(num_edges>2){
+		int e;
+		while(Adj[e=rand()%(N*N)]==0);
+		Adj[e]=0;
+		int ie=e/N,je2=ie;
+		while(je2==ie){
+			while(Adj[ie*N+(je2=rand()%N)]!=0);
+		}
+	#ifdef REWIRE
+		Adj[ie*N+je2]=1;
+	#else
+		je2=-1;
+	#endif
+		num_edges--;
+		//printf("\n");
+		float eps2 = generalized_connection_graph_method( Adj,7.79,N,1,2000000, 32.0);
+		float eps1 = generalized_connection_graph_method( Adj,7.79,N,1,2, 0.0);
+		float eps0 = generalized_connection_graph_method( Adj,7.79,N,0,80, 0.1);
+		printf( "%i %i %i %i %f %f %f\n",num_edges,ie,e%N,je2,eps1, eps2, eps0);
+	        fflush( stdout );
+		}
+	free(Adj);
+	exit( 0 );
+#else
+	int i,j, k;
+	float* Adj = malloc( N * N * sizeof( float ) );
+	for(int k=600; k<1000; ++k){
+ 	  memset(Adj,0,N*N*sizeof(float));   
+//          memset( Adj,0,N * N * sizeof( float ) );
+            for ( i = 0; i < N; ++i ) {
                 for ( j = 0; j < N; ++j ) {
-                    if(j%50<k){
+			if(i==j) continue;
+                    if(rand()%1000<k){
                         Adj[i*N+j]=1;
                     }
                 }
             }
-            */
-    for ( k = 2; k <= N/2; ++k ) {
-            memset( Adj,0,N * N * sizeof( float ) );
-            for ( i = 0; i < N; ++i ) {
-                for ( j = 1; j <=k; ++j ) {
-                    if(i%2==0){
-                        Adj[i*N+(i+j)%N]=1;
-                    }
-                    else{
-                        Adj[i+((i+j)%N)*N]=1;
-                    }
-                }
-            }
-		//printf("\n");
-		float* Adj1 = malloc( N * N * sizeof( float ) );
-		memcpy( Adj1, Adj, N * N * sizeof( float ) );
-		float eps1 = generalized_connection_graph_method( Adj,7.79,N,1,200000, 2.0);
-        printf( "%i %f ",k,eps1);
-		float eps0 = generalized_connection_graph_method( Adj,7.79,N,0,1, 0.99);
-		for ( i = 0; i < N; ++i ) {
-			Adj1[i] = -Adj[i];
-			float sum = 0;
-			for ( j = 0; j < N; ++j ) {
-				sum += Adj1[j * N + i];
-			}
-			Adj1[i * N + i] = -sum;
+            char fname[8]={0,0,0,0,0,0,0,0};
+	    sprintf(fname, ".r%i", k);
+	    FILE* fp=fopen(fname, "w+");
+	    for(int i=0; i<N; ++i){
+	    	for(int j=0; j<N; ++j){
+			fprintf(fp,"%f ", Adj[i*N+j]);
 		}
-		int ido = 0, nev = N-3;
-		int ncv = N;
-		float tol = 0.000001;
-		int ldv = N;
-		int iparam[11] = {1,0,10000000,1,0,1,1,0,0,0,0};
-		int ipntr[14] = {0,N,2 * N,N * 2,0,N * 4,N * 5,N * 5 + N * N, N * 5 + N * N,0,0,0,0,N * N * 2 + N * 5};
-		int lworkl = 3 * N * N + 8 * N;
-		int info = 0;
-		char bmat = 'I';
-		char which[2] = {'S','M'};
-		while ( 1 ) {
-			cnaupd_( &ido, &bmat, &N, which,
-					 &nev, &tol, resid,
-					 &ncv,  V, &ldv,
-					 iparam, ipntr, workd,
-					 workl, &lworkl, workr, &info );
-			if ( ido == 99 ) {
-				break;
-			} else if ( ido = 1 || ido == -1 )          {
-				workd[i + ipntr[2]][0] = workd[i + ipntr[0]][0];
-				workd[i + ipntr[2]][1] = workd[i + ipntr[0]][1];
-				for ( i = 0; i < N; ++i ) {
-					workd[i + ipntr[1]][0] = 0;
-					workd[i + ipntr[1]][1] = 0;
-					for ( j = 0; j < N; ++j ) {
-						workd[i + ipntr[1]][1] += Adj1[i * N + j] * workd[j + ipntr[0]][0];
-						workd[i + ipntr[1]][1] += Adj1[i * N + j] * workd[j + ipntr[0]][1];
-					}
-				}
-			} else if ( ido == 2 )        {
-
-				for ( i = 0; i < N; ++i ) {
-					workd[i + ipntr[1]][0] = workd[i + ipntr[0]][0];
-					workd[i + ipntr[1]][1] = workd[i + ipntr[0]][1];
-				}
-			}
-		}
-		free(Adj1);
-		float re_eig2 = workl[ipntr[5]+1][0];
-		int components = 0;
-		 printf( "%f %f %f\n", eps0,
-				7.79 / fabs( re_eig2 ), re_eig2 );
-        fflush( stdout );
+		fprintf(fp, "\n");
+	    }
+	    fclose(fp);
+		float eps2 = generalized_connection_graph_method( Adj,7.79,N,1,2000000, 32.0);
+		float eps1 = generalized_connection_graph_method( Adj,7.79,N,1,2, 0.0);
+//		float eps0 = generalized_connection_graph_method( Adj,7.79,N,0,80, 0.1);
+		printf( "%i %f %f\n",k,eps1, eps2);
+	        fflush( stdout );
 	}
 	free(Adj);
-    free(V);
-    free(workd);
-    free(workl);
-    free(workr);
-    free(resid);
 	exit( 0 );
+#endif
 }
