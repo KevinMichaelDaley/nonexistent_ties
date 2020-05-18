@@ -6,4 +6,4 @@ The source code for gcg() is heavily documented and several worked examples of t
 
 You may use this code for any purpose; however, please cite the following paper:
 
-[1] "Synchronizability in directed networks: The power of nonexistent ties."  Kevin Daley, Kun Zhao, and Igor Belykh.  Manuscript submitted (2019).
+[1] K. Daley, K. Zhao, and I. Belykh, "Synchronizability of directed networks: the power of non-existent ties," Chaos, V. 30, 043102 (2020)
